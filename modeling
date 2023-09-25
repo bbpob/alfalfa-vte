@@ -1,0 +1,195 @@
+library(caret)
+library(readxl)
+library(dplyr)
+library(ggplot2)
+
+mydata <- read_excel("eicu.xlsx", sheet = "Sheet1")
+testdata <- subset(mydata, mydata$hospitalid %in% c(58,59,60,61,63,66,67,71,73,79,83,92,108,110,122,
+                                                       123,131,140,141,142,143,144,146,148,152,154,157,
+                                                       165,167,171,176,181,182,183,184,188,194,195,197,
+                                                       198,200,203,204,209,212,262,263,265,303,310,323,
+                                                       328,342,351,352,355,356,363,381,385,386,388,393,
+                                                       400,401,409,412,414,422,425,437,438,447,449))
+traindata <- subset(mydata, !(mydata$hospitalid %in% c(58,59,60,61,63,66,67,71,73,79,83,92,108,110,122,
+                                                       123,131,140,141,142,143,144,146,148,152,154,157,
+                                                       165,167,171,176,181,182,183,184,188,194,195,197,
+                                                       198,200,203,204,209,212,262,263,265,303,310,323,
+                                                       328,342,351,352,355,356,363,381,385,386,388,393,
+                                                       400,401,409,412,414,422,425,437,438,447,449)))
+
+traindata <- traindata[, -c(33)]
+testdata <- testdata[, -c(33)]
+st <- function(x){
+  z <- (x - min(x)) / (max(x) - min(x))
+  return(z)
+}
+traindata[c(2,4,7,13:25)] <- apply(
+  traindata[c(2,4,7,13:25)],2,st
+)
+testdata[c(2, 4, 7, 13:25)] <- apply(
+  testdata[c(2, 4, 7, 13:25)],2,st
+)
+
+library(kableExtra)
+library(broom)
+set.seed(123)
+train_control <- trainControl(method = "cv", number = 5)
+metric <- "Accuracy"
+glm_AIC <-  train(
+  vte ~ .,
+  data = traindata,
+  trControl = train_control,
+  method = "glmStepAIC",
+  metric = metric,
+  family = "binomial"
+)
+summary(glm_AIC)
+
+pvalues <- glm_AIC$finalModel
+pvalues <- tidy(pvalues)
+pvalues$p.value <- paste(round(pvalues$p.value, 4), ifelse(pvalues$p.value < 0.05, "*", ""))
+
+colnames(pvalues) <- c("Parameter", "Estimate", "Std. Error", "P-value")
+
+kable(pvalues,
+      digits = 3,
+      col.names = colnames(pvalues)
+) %>%
+  kable_styling(bootstrap_options = "striped")
+
+myControl <- trainControl(
+  method = "cv",
+  number = 5,
+  verboseIter = TRUE,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary,
+  search = "random"
+)
+set.seed(2158)
+r.forest <- train(
+  vte ~ Age+Gender+BMI+Vte_History+Cancer_History+Cancer+Respiratory_Failure+Heart_Failure+Sepsis+Hematocrit+Hemoglobin+Platelet+
+    WBC+Albumin+Creatinine+INR+PT+PTT+Total_Bilirubin+ALT+AST+RBW_Input+Ventilation+CVC,
+  data = traindata,
+  method = "rf",
+  trControl = myControl
+)
+
+set.seed(100)
+xg.boost <- train(
+  vte ~ Age+Gender+BMI+Vte_History+Cancer_History+Cancer+Respiratory_Failure+Heart_Failure+Sepsis+Hematocrit+Hemoglobin+Platelet+
+    WBC+Albumin+Creatinine+INR+PT+PTT+Bilirubin+ALT+AST+RBW_Input+Ventilation+CVC,
+  data = traindata,
+  method = "xgbDART",
+  trControl = myControl
+)
+
+set.seed(219)
+svm <- train(
+  vte ~ Age+Gender+BMI+Vte_History+Cancer_History+Cancer+Respiratory_Failure+Heart_Failure+Sepsis+Hematocrit+Hemoglobin+Platelet+
+    WBC+Albumin+Creatinine+INR+PT+PTT+Bilirubin+ALT+AST+RBW_Input+Ventilation+CVC,
+  data = traindata,
+  method = "svmRadial",
+  trControl = myControl
+)
+
+library(pROC)
+pred_rf <- predict(r.forest, testdata, type = "prob")
+pred_xgb <- predict(xg.boost, testdata, type = "prob")
+pred_svm <- predict(svm, testdata, type = "prob")
+
+pred_rf_vte <- pred_rf[, 2]
+pred_xgb_vte <- pred_xgb[, 2]
+pred_svm_vte <- pred_svm[, 2]
+
+roc_rf <- roc(testdata$vte, pred_rf_vte)
+auc_rf <- auc(roc_rf)
+
+roc_xgb <- roc(testdata$vte, pred_xgb_vte)
+auc_xgb <- auc(roc_xgb)
+
+roc_svm <- roc(testdata$vte, pred_svm_vte)
+auc_svm <- auc(roc_svm)
+
+par(pty="s")
+plot(roc_rf, legacy.axes=TRUE,
+     col = "#3B4992B2",
+     lwd = 4,
+     xlab = "1-Specificty",
+     ylab = "Sensitivity",
+     main = "Receiver Operator Characteristic Curves")
+plot(roc_xgb, legacy.axes=TRUE,
+     col = "#008280B2",
+     lwd = 4,
+     add = TRUE)
+plot(roc_svm, legacy.axes=TRUE,
+     col = "#BB0021B2",
+     lwd = 4,
+     add = TRUE)
+legend('bottomright', 
+       legend = c('RF', 'XGB', 'SVM'), 
+       col = c("#3B4992B2", "#008280B2", "#BB0021B2"),
+       lwd = 4, cex = 1.0, text.width = 0.1)
+
+pred_rf <- predict(r.forest, testdata, type = "prob")
+pred_2_rf <- pred_rf[,1]
+p_class_rf <- ifelse(pred_2_rf > 0.8, "X0", "X1")
+confusionMatrix(reference = testdata$vte, data = p_class_rf$p_class, mode = "everything", positive = "vte")
+
+pred_xgb <- predict(xg.boost, testdata, type = "prob")
+pred_2_xgb <- pred_xgb[,1]
+p_class_xgb <- ifelse(pred_2_xgb > 0.8, "X0", "X1")
+confusionMatrix(reference = testdata$vte, data = p_class_xgb$p_class, mode = "everything", positive = "vte")
+
+pred_svm <- predict(svm, testdata, type = "prob")
+pred_2_svm <- pred_svm[,1]
+p_class_svm <- ifelse(pred_2_svm > 0.8, "X0", "X1")
+confusionMatrix(reference = testdata$vte, data = p_class_svm$p_class, mode = "everything", positive = "vte")
+
+library(DALEX)
+p_fun <- function(object, newdata){predict(object, newdata = newdata, type = "prob")[, 2]}
+testdata <- testdata[,-c(7,11,26,27,29,30)]
+yTest <- as.numeric(testdata$vte)
+yTest <- ifelse(yTest != 1, 1, 0)
+set.seed(8263)
+explainer <- explain(r.forest, label = "Random Forest",
+                     data = testdata, y = yTest,
+                     predict_function = p_fun)
+vip <- variable_importance(explainer)
+
+plot(vip, show_boxplots = FALSE, max_vars = 20) + ggtitle("Feature Importance ", "")
+
+model_profile_rf1 <- model_profile(explainer, type = "partial", 
+                                   variables = c("Age", "Hematocrit", "Hemoglobin", "Albumin"))
+p1 <- plot(model_profile_rf1, variables = c("Age", "Hematocrit", "Hemoglobin", "Albumin")) + ggtitle("Partial dependence profile ", "")
+
+
+model_profile_rf2 <- model_profile(explainer, type = "partial", 
+                                   variables = c("BMI", "Platelet", "WBC", "INR", "PT", "PTT"))
+p2 <- plot(model_profile_rf2, variables = c("BMI", "Platelet", "WBC", "INR", "PT", "PTT")) + ggtitle("Partial dependence profile ", "")
+
+
+model_profile_rf3 <- model_profile(explainer, type = "partial", 
+                                   variables = c("Creatinine", "ALT", "AST", "Total_Bilirubin"))
+p3 <- plot(model_profile_rf3, variables = c("Creatinine", "ALT", "AST", "Total_Bilirubin")) + ggtitle("Partial dependence profile ", "")
+
+
+model_profile_rf4 <- model_profile(explainer, type = "partial", 
+                                   variables = c("Gender", "Vte_History", "Cancer_History", "Cancer", "Respiratory_Failure", "Heart_Failure"))
+p4 <- plot(model_profile_rf4, variables = c("Gender", "Vte_History", "Cancer_History", "Cancer", "Respiratory_Failure", "Heart_Failure")) + ggtitle("Partial dependence profile ", "")
+
+
+model_profile_rf5 <- model_profile(explainer, type = "partial", 
+                                   variables = c("Sepsis", "Ventilation", "CVC", "RBW_Input"))
+p5 <- plot(model_profile_rf5, variables = c("Sepsis", "Ventilation", "CVC", "RBW_Input")) + ggtitle("Partial dependence profile ", "")
+
+single_customer_1 <- testdata[27,]
+explainer %>% predict_parts(new_observation = single_customer_1) %>% plot()
+
+single_customer_2 <- testdata[80,]
+explainer %>% predict_parts(new_observation = single_customer_2) %>% plot()
+
+single_customer_3 <- testdata[149,]
+explainer %>% predict_parts(new_observation = single_customer_3) %>% plot()
+
+single_customer_4 <- testdata[338,]
+explainer %>% predict_parts(new_observation = single_customer_4) %>% plot()
