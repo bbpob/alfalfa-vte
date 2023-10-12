@@ -150,7 +150,6 @@ p_fun <- function(object, newdata){predict(object, newdata = newdata, type = "pr
 testdata <- testdata[,-c(7,11,26,27,29,30)]
 yTest <- as.numeric(testdata$vte)
 yTest <- ifelse(yTest != 1, 1, 0)
-set.seed(8263)
 explainer <- explain(r.forest, label = "Random Forest",
                      data = testdata, y = yTest,
                      predict_function = p_fun)
